@@ -8,7 +8,8 @@
     body { max-width: 40rem; margin: 2rem auto; padding: 0 1rem; font: 1rem/1.5 system-ui, sans-serif; }
     textarea { box-sizing: border-box; display: block; width: 100%; margin: .5rem 0; padding: .5rem; font: inherit; }
     button { padding: .4rem .8rem; font: inherit; }
-    pre { white-space: pre-wrap; }
+    #draft { white-space: pre-wrap; margin: 0; }
+    [hidden] { display: none; }
   </style>
 </head>
 <body>
@@ -18,18 +19,65 @@
     <textarea id="message" rows="4"></textarea>
     <button type="submit">Разобрать заявку</button>
   </form>
-  <pre id="result" aria-live="polite"></pre>
+  <div id="result" aria-live="polite">
+    <p id="notice" hidden></p>
+    <p id="topic" hidden></p>
+    <pre id="draft" hidden></pre>
+  </div>
   <script type="module">
+    const topics = { delivery: "Доставка", pricing: "Цена", other: "Другое" };
     const form = document.querySelector("form");
-    const result = document.querySelector("#result");
+    const button = form.querySelector("button");
+    const notice = document.querySelector("#notice");
+    const topic = document.querySelector("#topic");
+    const draft = document.querySelector("#draft");
+    let requestId = 0;
+    let current = null;
+
+    function show(next) {
+      notice.hidden = !next.notice;
+      notice.textContent = next.notice || "";
+      topic.hidden = !next.topic;
+      topic.textContent = next.topic || "";
+      draft.hidden = !next.draft;
+      draft.textContent = next.draft || "";
+    }
+
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
-      const reply = await fetch("/api/triage", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: document.querySelector("#message").value }),
-      });
-      result.textContent = JSON.stringify(await reply.json(), null, 2);
+      const id = ++requestId;
+      if (current) current.abort();
+      const controller = new AbortController();
+      current = controller;
+      button.disabled = true;
+      show({});
+      try {
+        const reply = await fetch("/api/triage", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: document.querySelector("#message").value }),
+          signal: controller.signal,
+        });
+        const body = await reply.json();
+        if (id !== requestId) return;
+        if (reply.status === 400) {
+          show({ notice: "Введите текст заявки." });
+          return;
+        }
+        if (body.status === "ready" && body.draft) {
+          show({
+            topic: `Тема: ${topics[body.topic] || body.topic}`,
+            draft: body.draft,
+          });
+          return;
+        }
+        show({ notice: "Авторазбор не получился. Разберите заявку вручную." });
+      } catch (error) {
+        if (error.name === "AbortError" || id !== requestId) return;
+        show({ notice: "Авторазбор не получился. Разберите заявку вручную." });
+      } finally {
+        if (id === requestId) button.disabled = false;
+      }
     });
   </script>
 </body>
